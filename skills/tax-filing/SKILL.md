@@ -134,18 +134,18 @@ Verify each download has `%PDF-` header (not an HTML error page).
 
 ### Step 8: Discover Field Names & Fill Forms
 
-#### Discovery — ONCE per form, bulk JSON
+#### Discovery — ONCE per form, use `--compact`
 
 ```bash
-python scripts/discover_fields.py forms/f1040_blank.pdf --xfa-only --json > work/f1040_fields.json
-python scripts/discover_fields.py forms/f8949_blank.pdf --xfa-only --json > work/f8949_fields.json
-python scripts/discover_fields.py forms/f1040sd_blank.pdf --xfa-only --json > work/f1040sd_fields.json
-python scripts/discover_fields.py forms/ca540_blank.pdf --json > work/ca540_fields.json
+python scripts/discover_fields.py forms/f1040_blank.pdf --compact > work/f1040_fields.json
+python scripts/discover_fields.py forms/f8949_blank.pdf --compact > work/f8949_fields.json
+python scripts/discover_fields.py forms/f1040sd_blank.pdf --compact > work/f1040sd_fields.json
+python scripts/discover_fields.py forms/ca540_blank.pdf --compact > work/ca540_fields.json
 ```
 
-Read the saved JSON files to map field names. Do NOT use `--search` repeatedly.
+`--compact` outputs a minimal `{field_name: description}` mapping — each field name is paired with its tooltip/speak description so you can map line numbers to field names directly without manual inspection. Radio buttons include their option values (e.g. `{"/2": "Single", "/1": "MFJ"}`).
 
-IRS XFA discovery includes `radio_options` showing which `/AP/N` key = which choice (e.g. filing status, yes/no).
+Do NOT use `--search` repeatedly or `--json` (which dumps raw metadata and wastes context).
 
 **HARD FAIL**: If discovery returns 0 human-readable descriptions, STOP. Do not guess field names.
 
@@ -181,7 +181,7 @@ Show a summary table, verification checklist, capital loss carryover (if any), t
 ### Context
 - NEVER use Read tool on PDFs — use pdfplumber
 - NEVER read same document twice — save to `work/tax_data.txt`
-- Field discovery once per form as bulk JSON — no repeated `--search`
+- Field discovery once per form with `--compact` — no `--json` (wastes context), no repeated `--search`
 
 ### Field Discovery
 - Field names change between years — always discover fresh

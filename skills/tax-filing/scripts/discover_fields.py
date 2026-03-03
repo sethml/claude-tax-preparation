@@ -13,6 +13,7 @@ Usage:
     python discover_fields.py form.pdf --xfa-only
     python discover_fields.py form.pdf --json
     python discover_fields.py form.pdf --json --xfa-only > fields.json
+    python discover_fields.py form.pdf --compact          # minimal field→description mapping
 """
 
 import argparse
@@ -264,6 +265,68 @@ def _format_json(pdf_path, acroform_fields, xfa_fields, xfa_only):
     return result
 
 
+def _format_compact(pdf_path, acroform_fields, xfa_fields):
+    """Format as a minimal {field_name: description} mapping.
+
+    For text fields: {"f1_32": "Line 1a. Wages, salaries, tips..."}
+    For radios:      {"c1_3": {"desc": "Filing status", "options": {"/1": "MFJ", "/2": "Single"}}}
+    For checkboxes:  {"540-1029 CB": {"desc": "Same address", "type": "checkbox"}}
+
+    Prefers XFA speak descriptions when available, falls back to AcroForm tooltips.
+    """
+    mapping = {}
+
+    # XFA fields (IRS forms) — these have the best descriptions
+    for f in xfa_fields:
+        name = f["name"]
+        desc = f.get("speak", "")
+        if f.get("radio_options"):
+            # Radio/exclGroup — include the option values
+            mapping[name] = {"desc": desc, "options": {
+                val: kids[0] for val, kids in f["radio_options"].items()
+            }}
+        elif desc:
+            mapping[name] = desc
+
+    # AcroForm fields (CA forms, or fallback for IRS) — use tooltip
+    for f in acroform_fields:
+        name = f["name"]
+        parent = f.get("parent", "")
+        tooltip = f.get("tooltip", "")
+
+        # For radio children, group under parent name
+        if parent and f["type"] == "Btn" and f.get("ap_n_keys"):
+            key = parent
+            if key not in mapping:
+                mapping[key] = {"desc": tooltip, "options": {}}
+            opts = mapping[key].get("options", {})
+            for k in f["ap_n_keys"]:
+                if k != "/Off":
+                    opts[k] = name
+            mapping[key]["options"] = opts
+            continue
+
+        # Standalone checkbox (parent name with CB/RB suffix)
+        if f["type"] == "Btn" and not f.get("ap_n_keys"):
+            full = f"{parent} CB" if parent else name
+            if full not in mapping:
+                mapping[full] = {"desc": tooltip, "type": "checkbox"}
+            continue
+
+        # Text field — skip if already from XFA with a description
+        if name in mapping:
+            continue
+
+        # Use parent-prefixed name if the field itself has no /T
+        if not name or name.startswith("(parent:"):
+            continue
+
+        if tooltip:
+            mapping[name] = tooltip
+
+    return {"pdf": pdf_path, "fields": mapping}
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Discover PDF form field names, types, and metadata."
@@ -280,20 +343,23 @@ def main():
                         help="Only show XFA field descriptions (skip AcroForm)")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="Output as JSON instead of human-readable text")
+    parser.add_argument("--compact", action="store_true",
+                        help="Output minimal {field_name: description} mapping as JSON")
 
     args = parser.parse_args()
 
     all_results = []
     for pdf_path in args.pdfs:
-        acroform_fields = []
-        if not args.xfa_only:
-            acroform_fields = discover_acroform(
-                pdf_path, args.page, args.search, args.type_filter
-            )
-
+        acroform_fields = discover_acroform(
+            pdf_path, args.page, args.search, args.type_filter
+        )
         xfa_fields = discover_xfa(pdf_path, args.search)
 
-        if args.json_output:
+        if args.compact:
+            all_results.append(
+                _format_compact(pdf_path, acroform_fields, xfa_fields)
+            )
+        elif args.json_output:
             all_results.append(
                 _format_json(pdf_path, acroform_fields, xfa_fields, args.xfa_only)
             )
@@ -302,7 +368,7 @@ def main():
             if pdf_path != args.pdfs[-1]:
                 print("\n" + "=" * 60 + "\n")
 
-    if args.json_output:
+    if args.compact or args.json_output:
         output = all_results if len(all_results) > 1 else all_results[0]
         json.dump(output, sys.stdout, indent=2)
         print()
