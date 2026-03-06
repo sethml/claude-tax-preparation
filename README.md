@@ -1,24 +1,57 @@
 # Tax Filing Skill for Claude Code
 
-A Claude Code skill that prepares income tax returns end-to-end — reads source documents, computes taxes, discovers PDF form fields, and fills the official forms.
+This Skill helps Claude turn a folder of tax documents into a mostly-complete filing workflow: read the source docs, compute the return, fill the forms, and hand back a clear summary of what to review before filing.
 
 ## What It Does
 
-1. **Reads** your W-2s, 1099s, brokerage statements, and prior-year returns
-2. **Looks up** current-year tax brackets, deductions, and credits
-3. **Computes** all the math — income, deductions, brackets, credits, capital gains
-4. **Downloads** the official blank PDF forms from IRS.gov / FTB.ca.gov
-5. **Discovers** field names in each PDF (XFA extraction, /TU tooltips, positional analysis)
-6. **Fills** every form programmatically using pypdf
-7. **Verifies** all fields were written correctly
-8. **Presents** a summary with verification checklist, signing reminders, and payment instructions
+- Reads W-2s, 1099s, brokerage statements, and prior-year returns
+- Asks the missing filing questions Claude needs to finish the return
+- Computes federal and state tax results, including capital gains and carryovers
+- Downloads official blank PDF forms and fills them programmatically
+- Verifies outputs and returns a human-friendly summary of refunds, forms, and next steps
 
 ## Installation
 
-There's no installation. Yes this is technically a "Skill" you can install. But it's way easier to:
+You have two easy options:
 
-1. Download Claude Desktop
-2. Go to "Claude Cowork" or "Claude Code" section and point it at the folder your tax docs are in
-3. Say "Do my taxes. You can look at https://github.com/robbalian/claude-tax-filing for the skill for help"
+1. Upload `tax-filing-skill.zip` to Claude as a Skill.
+2. Or just ask Claude to use the Skill at [github.com/robbalian/claude-tax-filing](https://github.com/robbalian/claude-tax-filing).
 
-Claude. Will do. The rest.
+Then point Claude at your tax documents folder and say something like:
+
+```text
+Do my taxes using this Skill.
+```
+
+## What It Looks Like
+
+Start with a simple prompt:
+
+![Starting prompt in Claude](docs/images/start-prompt.png)
+
+Claude asks the follow-up questions needed to finish the return:
+
+![Filing questions UI](docs/images/filing-questions.png)
+
+It works through the filing steps and keeps track of progress:
+
+![Workflow progress](docs/images/workflow-progress.png)
+
+At the end, it gives you a clean summary of refunds, carryovers, and filled forms:
+
+![Results summary](docs/images/results-summary.png)
+
+## What You Get
+
+- Filled PDF forms in `output/`
+- A summary of federal and state results
+- Any carryover values to save for next year
+- A checklist of what to sign, review, and file
+
+## What We've Learned
+
+Skills are not just a single `.md` file anymore. They can also include scripts, code snippets, and example files, which makes them much more powerful.
+
+## Contributing
+
+Contributions are welcome via PR.
