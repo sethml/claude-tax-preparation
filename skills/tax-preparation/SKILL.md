@@ -69,7 +69,7 @@ framework. This workbook is the single source of truth for all numbers on the re
 
 | Sheet | Contents | Rule |
 |-------|----------|------|
-| Source Data | Raw numbers from tax documents and user input | No computation — extraction only |
+| Source Data | Raw numbers from tax documents and user input. **Include document-level totals** (e.g., "Schwab 1099 — Total Proceeds") so validation can reconcile individual items against the document total. | No computation — extraction only |
 | Tax Tables | Brackets, rates, thresholds, MACRS rates | Values from government sources |
 | *(computation sheets)* | One per area: Capital Gains, Rental Property, Depreciation, FTC, QDCG Worksheet, etc. | ALL values are computed in Python with exact precision; each row records its formula as a string for auditing |
 | Federal Return | One row per 1040 line | Formula references to computation sheets |
@@ -244,9 +244,10 @@ Write `work/build_computations.py` — a Python script that creates the computat
 Compute supporting schedules BEFORE the main 1040, since their results flow into it.
 
 **Capital Gains (if applicable):**
-1. Form 8949: individual transactions (Part I short-term, Part II long-term)
-2. Schedule D: totals, loss limitation, carryover (check prior year for carryovers)
-3. Net gain/loss → 1040 Line 7
+1. Extract **every** 1099-B box category (A, B, C, D, E, F). Include document-level total proceeds in Source Data so validation can reconcile. Missing a category (e.g., Box B short-term basis-not-reported) silently drops gains/losses.
+2. Form 8949: individual transactions (Part I short-term, Part II long-term)
+3. Schedule D: totals, loss limitation, carryover (check prior year for carryovers)
+4. Net gain/loss → 1040 Line 7
 
 **Rental Income (if applicable — Schedule E):**
 1. **Allocate shared expenses** by square footage (not naive unit count). **Use exact fractions (e.g., 1200/4500) — never round percentages at intermediate steps.**

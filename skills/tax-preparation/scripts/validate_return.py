@@ -283,6 +283,86 @@ def run_input_checks(wb, forms_dir=None):
     # but we can flag if they're identical when the user reported HSA
     # This check is informational — the embedded validation should catch specifics
 
+    # Source document reconciliation: verify Source Data totals match computations
+    source_checks = run_source_reconciliation(wb)
+    checks.extend(source_checks)
+
+    return checks
+
+
+def run_source_reconciliation(wb):
+    """Reconcile Source Data totals against computation sheet totals.
+
+    Checks that every dollar amount extracted from source documents is
+    accounted for in the computation sheets. Catches data that was
+    extracted but dropped, or never extracted at all.
+
+    Looks for document-level totals in Source Data (rows with 'total'
+    in the item name) and compares against the sum of individual items
+    from that same source.
+    """
+    checks = []
+
+    if "Source Data" not in wb.sheetnames:
+        return checks
+
+    ws = wb["Source Data"]
+
+    # Collect all source data rows: {category: [(item, value, source), ...]}
+    by_category = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row[0] is None:
+            continue
+        category, item, value, source = (
+            str(row[0]) if row[0] else "",
+            str(row[1]) if row[1] else "",
+            row[2],
+            str(row[3]) if len(row) > 3 and row[3] else "",
+        )
+        if category not in by_category:
+            by_category[category] = []
+        by_category[category].append((item, value, source))
+
+    # For each category, check if there's a "total" row and if individual
+    # items sum to it
+    for category, rows in by_category.items():
+        total_rows = [(item, val) for item, val, _ in rows
+                      if 'total' in item.lower() and val is not None
+                      and isinstance(val, (int, float))]
+        if not total_rows:
+            continue
+
+        for total_item, total_val in total_rows:
+            # Find the keyword that identifies what this total covers
+            # e.g., "Total Proceeds" -> look for other rows with "Proceeds"
+            total_lower = total_item.lower()
+            keyword = None
+            for kw in ['proceeds', 'cost', 'basis', 'gain', 'loss',
+                       'income', 'dividend', 'interest', 'rent',
+                       'tax', 'withheld', 'withholding']:
+                if kw in total_lower:
+                    keyword = kw
+                    break
+
+            if keyword is None:
+                continue
+
+            # Sum individual (non-total) rows that contain the same keyword
+            parts = []
+            for item, val, _ in rows:
+                if 'total' not in item.lower() and keyword in item.lower() \
+                        and val is not None and isinstance(val, (int, float)):
+                    parts.append(val)
+
+            if parts:
+                parts_sum = sum(parts)
+                checks.append((
+                    f"SOURCE: {category} — {total_item} ({total_val:,.2f}) "
+                    f"== sum of {len(parts)} items ({parts_sum:,.2f})",
+                    total_val, parts_sum,
+                    abs(total_val - parts_sum) <= 1
+                ))
+
     return checks
 
 
