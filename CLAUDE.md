@@ -1,10 +1,10 @@
 # Development Notes
 
-## Skill Sync
+## Skill Location
 
-There are two versions of the tax-preparation skill that must be kept in sync:
+The skill lives at `skills/tax-preparation/SKILL.md`. When installed locally,
+it should be kept in sync with `~/.claude/skills/tax-preparation/`.
 
-1. `skills/tax-preparation/SKILL.md` — Claude Code version
-2. `skills/tax-preparation-cloud/SKILL.md` — Claude.ai version
+## Testing
 
-The two versions differ in environment-specific details (tool names, file access patterns) but share the same tax logic. When editing the skill, apply changes to both.
+See `skills/tax-preparation/docs/testing.md` for the test methodology.
