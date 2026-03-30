@@ -21,6 +21,7 @@ working_dir/
     pdf_pdfplumber/    ← pdfplumber text extraction (one .txt per document)
     pdf_ocrmac/        ← ocrmac extraction, if available (one .txt per document)
     pdf_tesseract/     ← Tesseract tessdata_best extraction (one .txt per document)
+    pdf_img2table/     ← img2table bordered-table extraction (one .txt per document)
     pdf_marker/        ← marker --strip_existing_ocr extraction, if used (one .md per document)
     images/            ← 300 DPI JPEG page images for ambiguous documents
     summary/           ← reconciled per-document tax value summaries (one .txt per document)
@@ -173,10 +174,11 @@ Before extracting, ask the user whether to also run marker-pdf:
 > highest-accuracy structured output (6 GB install, around 30 min for a typical
 > set of documents on Apple Silicon, 2–3× slower on CPU).
 >
-> Without marker, I'll run pdfplumber, ocrmac (if on macOS), and Tesseract,
-> then cross-check them against each other. Where they disagree or the
-> data looks suspicious, I'll view the page images directly to resolve it.
-> This is fast (~1 min) but uses more of my context for the image review step.
+> Without marker, I'll run pdfplumber, ocrmac (if on macOS), Tesseract, and
+> img2table (for bordered-form table detection), then cross-check them against
+> each other. Where they disagree or the data looks suspicious, I'll view the
+> page images directly to resolve it. This is fast (~1 min) but uses more of
+> my context for the image review step.
 >
 > With marker, disagreements are rarer (marker is the most accurate local
 > reader), so image review is only needed when marker itself looks off.
@@ -194,6 +196,7 @@ files — one per reader per document, using the document's filename (without
 | pdfplumber | `work/pdf_pdfplumber/` | `.txt` | Always |
 | ocrmac | `work/pdf_ocrmac/` | `.txt` | Always on macOS (skip on Linux/Windows) |
 | Tesseract (tessdata_best) | `work/pdf_tesseract/` | `.txt` | Always |
+| img2table (Tesseract) | `work/pdf_img2table/` | `.txt` | Always |
 | marker `--strip_existing_ocr` | `work/pdf_marker/` | `.md` | Only if user opted in |
 
 **Reader setup:**
@@ -225,6 +228,33 @@ tesseract page.jpg output -l eng --tessdata-dir work/tessdata_best
 **Must use tessdata_best** — the default `tessdata_fast` has systematic 0↔8
 digit confusion (e.g., `0.00` → `8.00`).
 
+*img2table:* Install from GitHub main (PyPI version is broken with modern polars):
+```bash
+pip install "git+https://github.com/xavctn/img2table.git@main"
+```
+Requires Tesseract system package (already installed for the Tesseract reader above).
+Render each page to 300 DPI image, then extract bordered tables:
+```python
+import os
+os.environ["TESSDATA_PREFIX"] = "work/tessdata_best"  # Use tessdata_best models
+from img2table.document import PDF
+from img2table.ocr import TesseractOCR
+
+ocr = TesseractOCR(n_threads=4, lang="eng")
+doc = PDF(src=pdf_path)
+tables = doc.extract_tables(ocr=ocr, implicit_rows=True, implicit_columns=True, min_confidence=50)
+for page_num, page_tables in tables.items():
+    for table in page_tables:
+        df = table.df  # pandas DataFrame with cell contents
+```
+img2table uses OpenCV to detect bordered table cells and runs Tesseract within
+each cell. It only extracts content inside bordered tables — documents without
+grid lines return zero tables. For many documents its output will be empty or
+gibberish, but for forms that structure numbers into boxes (W-2, 1099-DIV,
+1099-INT), it produces **cell-level label–value association** that no other
+text-based reader achieves. This is critical for forms where other readers
+misassociate values with the wrong box due to reading-order ambiguity.
+
 *marker-pdf:* `pip install marker-pdf` (~6 GB total with models).
 **Always use `--strip_existing_ocr`.** Default mode trusts embedded OCR text,
 which is garbage on some scanned documents (e.g., W-2 values come back blank).
@@ -239,6 +269,8 @@ them only the list of file paths and the extraction command, not the full
 tax_data or other document contents.
 
 ##### Step 3: Reconcile and summarize
+
+Make sure all OCR extraction has completed before starting reconciliation.
 
 For each source document, read the output from all readers and produce a
 reconciled summary in `work/summary/<document>.txt`. The summary format is:
@@ -264,6 +296,16 @@ as ambiguous if:
 - A value looks suspicious (e.g., round numbers where decimals are expected,
   values that don't match document-level totals)
 - Values don't seem internally consistent (e.g. withholding exceeds wages))
+
+**When to trust img2table over other readers:** img2table's output is
+authoritative for **which box a value belongs to** on bordered forms (W-2,
+1099-INT, 1099-DIV). Other readers extract text in reading order and often
+misassociate a value with the wrong box when multiple boxes share the same
+y-coordinate (e.g., placing box 1's value into box 4). If img2table found a
+bordered table and placed a value in a specific cell, trust its label–value
+association over the other readers' positional guesses. However, img2table
+returns nothing for documents without visible grid lines — don't treat empty
+img2table output as a sign that data is missing.
 
 ##### Step 4: Resolve ambiguities with page images
 
