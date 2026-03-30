@@ -18,7 +18,12 @@ Organize all work into subfolders of the working directory:
 working_dir/
   source/              ← user's source documents (W-2, 1099s, prior return, CSVs)
   work/                ← ALL intermediate files (extracted data, field maps, computations)
-    tax_data.txt       ← extracted figures from source docs
+    pdf_pdfplumber/    ← pdfplumber text extraction (one .txt per document)
+    pdf_ocrmac/        ← ocrmac extraction, if available (one .txt per document)
+    pdf_tesseract/     ← Tesseract tessdata_best extraction (one .txt per document)
+    pdf_marker/        ← marker --strip_existing_ocr extraction, if used (one .md per document)
+    images/            ← 300 DPI JPEG page images for ambiguous documents
+    summary/           ← reconciled per-document tax value summaries (one .txt per document)
     computations.txt   ← all tax math (federal, state, capital gains, rental)
     f1040_fields.json  ← field discovery dumps (one per form)
     f8949_fields.json
@@ -140,10 +145,11 @@ wb.save("work/tax_computations.xlsx")
 
 These rules prevent context blowouts that cause compaction:
 
-1. **NEVER read PDFs with the Read tool.** Each page becomes ~250KB of base64 images (a 9-page return = 1.8 MB). Use the PDF extraction method chosen in Phase 1a instead.
-2. **NEVER read the same document twice.** Save extracted figures to `work/tax_data.txt` on first read.
+1. **NEVER read PDFs with the Read tool.** Each page becomes ~250KB of base64 images (a 9-page return = 1.8 MB). Use the PDF extraction pipeline in Phase 1a instead.
+2. **NEVER read the same document twice.** Each document's tax-relevant values are saved to `work/summary/<document>.txt` on first read. Use those summaries for all downstream work.
 3. **Run field discovery ONCE per form** as a bulk JSON dump to `work/`. Do NOT use `--search` repeatedly.
 4. **Save all computed values to `work/computations.txt`** so they survive compaction.
+5. **Do NOT send raw reader output to subagents.** Subagents that need document data should read the reconciled `work/summary/` files, not the raw `work/pdf_*/` extractions. Raw reader output can be 10–50× larger than the summary.
 
 ## Workflow
 
@@ -153,125 +159,140 @@ Do all automated/cheap work first, then ask the user.
 
 #### 1a. Read and extract user-provided documents
 
-**Before extracting any PDFs, ask the user which extraction method to use.**
-Present these three options, explaining the tradeoffs:
+Move source files to `source/` if needed. Use the Read tool for CSVs. For PDFs,
+use the multi-reader extraction pipeline below. The pipeline runs multiple
+readers, cross-checks their output, and produces a reconciled summary per document.
 
-> **How would you like me to extract data from your tax PDFs?**
+##### Step 1: Ask about marker-pdf
+
+Before extracting, ask the user whether to also run marker-pdf:
+
+> **Would you like to also run marker-pdf for PDF extraction?**
 >
-> 1. **Have Claude view the PDFs directly** — Simplest and accurate on
->    all document types including scanned forms.
->    Your financial data (SSNs, income, etc.) goes to Claude's API — but if I'm already
->    preparing your return, this adds no new exposure. May cost ~$0.25–0.80 in
->    image/document tokens for a typical set of documents.
+> Marker uses deep learning for OCR and table recognition — it produces the
+> highest-accuracy structured output (~6 GB install, ~25–30 min for a typical
+> set of documents on Apple Silicon, 2–3× slower on CPU).
 >
-> 2. **Fast local OCR** — All processing stays on your machine. Uses `pdfplumber`
->    for machine-generated PDFs (instant, perfect), falling back to local OCR for
->    scanned documents. ~15–40 seconds total. Rare errors (~1 digit per 500
->    values on scanned docs). On macOS uses Apple Vision (ocrmac); on Linux/Windows
->    uses Tesseract with tessdata_best models. Requires installing `pdfplumber` and
->    `pdf2image` plus `ocrmac` (macOS) or `tesseract` with tessdata_best (Linux/Windows).
+> Without marker, I'll run pdfplumber, ocrmac (if on macOS), and Tesseract,
+> then cross-check them against each other. Where they disagree or the
+> data looks suspicious, I'll view the page images directly to resolve it.
+> This is fast (~1 min) but uses more of my context for the image review step.
 >
-> 3. **Accurate local OCR (marker-pdf)** — Highest local accuracy with structured
->    Markdown+table output, but slow (~25 min for a typical set of documents on
->    Apple Silicon; 2–3× slower on CPU). Uses deep learning models for OCR and
->    layout detection. Perfect digit accuracy on scanned forms. Large install
->    (~6GB downloaded).
+> With marker, disagreements are rarer (marker is the most accurate local
+> reader), so image review is only needed when marker itself looks off.
 
-Wait for the user's answer before proceeding. Record their choice in
-`work/pdf_extraction_method.txt`.
+Record their choice in `work/pdf_extraction_method.txt`.
 
-Read files from `source/` (move them there if needed). Use the chosen method for PDFs, Read tool for CSVs. Save all extracted figures to `work/tax_data.txt` immediately — one section per document with every relevant number.
+##### Step 2: Run readers
 
-**PDF extraction by method:**
+Run these readers on every PDF in `source/`. Save output to per-document
+files — one per reader per document, using the document's filename (without
+`.pdf`) as the base name:
 
-*Method 1 — Have Claude view the PDFs directly:*
+| Reader | Output directory | File ext | When to run |
+|--------|-----------------|----------|-------------|
+| pdfplumber | `work/pdf_pdfplumber/` | `.txt` | Always |
+| ocrmac | `work/pdf_ocrmac/` | `.txt` | Always on macOS (skip on Linux/Windows) |
+| Tesseract (tessdata_best) | `work/pdf_tesseract/` | `.txt` | Always |
+| marker `--strip_existing_ocr` | `work/pdf_marker/` | `.md` | Only if user opted in |
 
-Read the PDF files and extract relevant text to work/tax_data.txt.
+**Reader setup:**
 
-In **Claude Code**, just read the PDF files directly — Claude handles them natively.
-
-In **GitHub Copilot (VS Code)**, convert pages to images and use `view_image`:
-```bash
-# Requires Poppler installed
-pdftoppm -jpeg -r 300 source/document.pdf work/pages/document
-```
-Then use GitHub Copilot's `view_image` tool each resulting JPEG.
-
-*Method 2 — Fast local (pdfplumber + OCR fallback):*
-
-Use `pypdfium2` to inspect each page's text objects and decide whether to trust
-pdfplumber or fall back to OCR. This is the same approach marker uses internally —
-it catches all failure modes that simple heuristics miss (invisible OCR text with
-proper spacing, non-embedded placeholder fonts, scanned pages with background images).
-
+*pdfplumber:* `pip install pdfplumber` — extracts the embedded text layer.
+Instant and perfect on machine-generated PDFs. Returns garbage on scanned docs.
 ```python
 import pdfplumber
-import pypdfium2 as pdfium
-import pypdfium2.raw as pdfium_c
-
-def page_has_real_text(pdf_path, page_num):
-    """Check if a page has genuine (non-OCR) text using pdfium object inspection."""
-    doc = pdfium.PdfDocument(pdf_path)
-    page = doc.get_page(page_num)
-    page_bbox = page.get_bbox()  # (left, bottom, right, top)
-    page_area = (page_bbox[2] - page_bbox[0]) * (page_bbox[3] - page_bbox[1])
-
-    text_objs = [obj for obj in page.get_objects()
-                 if obj.type == pdfium_c.FPDF_PAGEOBJ_TEXT]
-    if not text_objs:
-        return False  # no text at all — need OCR
-
-    all_invisible = True
-    all_non_embedded = True
-    for text_obj in text_objs:
-        mode = pdfium_c.FPDFTextObj_GetTextRenderMode(text_obj)
-        if mode not in (pdfium_c.FPDF_TEXTRENDERMODE_INVISIBLE,
-                        pdfium_c.FPDF_TEXTRENDERMODE_UNKNOWN):
-            all_invisible = False
-        font = pdfium_c.FPDFTextObj_GetFont(text_obj)
-        if pdfium_c.FPDFFont_GetIsEmbedded(font):
-            all_non_embedded = False
-
-    if all_invisible or all_non_embedded:
-        return False  # OCR-generated text — need fresh OCR
-
-    # Check for large page-covering images (scanned page with OCR behind it)
-    for obj in page.get_objects():
-        if obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE:
-            l, b, r, t = obj.get_pos()
-            img_area = (r - l) * (t - b)
-            if img_area / page_area >= 0.65:
-                return False  # page is a scan
-
-    return True
-
-def extract_text(pdf_path):
-    """Extract text, falling back to OCR for scanned/OCR'd pages."""
-    texts = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for i, page in enumerate(pdf.pages):
-            if page_has_real_text(pdf_path, i):
-                text = page.extract_text() or ""
-                if len(text.strip()) < 50:
-                    text = ocr_page(pdf_path, page_num=i)
-            else:
-                text = ocr_page(pdf_path, page_num=i)
-            texts.append(text)
-    return "\n\n".join(texts)
+with pdfplumber.open(pdf_path) as pdf:
+    text = "\n\n".join(p.extract_text() or "" for p in pdf.pages)
 ```
-For the `ocr_page` function: on macOS, use `ocrmac.OCR(image).recognize()`;
-on Linux/Windows, use Tesseract with `tessdata_best` (NOT `tessdata_fast`, which
-has systematic 0↔8 confusion). Render at 300 DPI for OCR.
 
-*Method 3 — Accurate local (marker-pdf):*
+*ocrmac (macOS only):* `pip install ocrmac pdf2image` — uses Apple Vision.
+Render each page to 300 DPI image, then `ocrmac.OCR(image_path).recognize()`.
+~1 second per page. Near-perfect accuracy (~1 digit error per 500 values).
+
+*Tesseract:* Install the system package (`brew install tesseract` or
+`apt install tesseract-ocr`), then download `tessdata_best` models into
+`work/` so they don't modify the system install:
 ```bash
-marker_single "source/document.pdf" --output_dir work/marker_output \
+mkdir -p work/tessdata_best
+curl -L -o work/tessdata_best/eng.traineddata \
+  https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata
+```
+Render each page to 300 DPI image, then run:
+```bash
+tesseract page.jpg output -l eng --tessdata-dir work/tessdata_best
+```
+**Must use tessdata_best** — the default `tessdata_fast` has systematic 0↔8
+digit confusion (e.g., `0.00` → `8.00`).
+
+*marker-pdf:* `pip install marker-pdf` (~6 GB total with models).
+**Always use `--strip_existing_ocr`.** Default mode trusts embedded OCR text,
+which is garbage on some scanned documents (e.g., W-2 values come back blank).
+```bash
+marker_single "source/document.pdf" --output_dir work/pdf_marker \
   --strip_existing_ocr --disable_image_extraction
 ```
-**Always use `--strip_existing_ocr`.** Default mode trusts embedded OCR text, which
-is garbage on some scanned documents (e.g., W-2 values can come back blank). The
-`--strip_existing_ocr` flag removes existing text and lets marker decide whether
-to OCR based on actual page content.
+
+**Use subagents to run readers in parallel when possible.** Each subagent should
+run one reader across a batch of documents. Keep subagent context small — give
+them only the list of file paths and the extraction command, not the full
+tax_data or other document contents.
+
+##### Step 3: Reconcile and summarize
+
+For each source document, read the output from all readers and produce a
+reconciled summary in `work/summary/<document>.txt`. The summary format is:
+
+```
+## YYYY <Form Type>: <Issuer> — <Recipient>
+- EIN: XX-XXXXXXX
+- Box 1 (Description): $X,XXX.XX
+- Box 2 (Description): $X,XXX.XX
+...
+```
+
+(See `tax_data_organized.txt` for a complete example of the expected format —
+one section per document, with every tax-relevant field labeled by box number
+and description, dollar amounts with `$` prefix and commas.)
+
+**Cross-check procedure:** For each value, compare what each reader reported.
+If all readers that produced usable output agree, use that value. Flag a value
+as ambiguous if:
+- Readers disagree (e.g., ocrmac says `$10,782.66`, Tesseract says `$10,702.66`)
+- Only one reader produced output for a scanned page (pdfplumber returned garbage)
+  and marker was not used
+- A value looks suspicious (e.g., round numbers where decimals are expected,
+  values that don't match document-level totals)
+
+##### Step 4: Resolve ambiguities with page images
+
+For any document with ambiguous values, render the relevant pages to 300 DPI
+JPEG images and read them directly:
+
+```bash
+mkdir -p work/images
+pdftoppm -jpeg -r 300 -f <page> -l <page> source/document.pdf work/images/document-page
+```
+
+Then view the images (in Claude Code, read the image file directly; in
+Copilot, use `view_image`) and determine the correct values. Update the
+summary file with the resolved values.
+
+**Do NOT view images for documents where all readers agree** — this wastes
+context. Only use images as a tiebreaker.
+
+##### Step 5: User verification
+
+**If marker was used:** Summarize only documents where any ambiguity or doubt
+remains after cross-checking, and ask the user to verify those specific values.
+
+**If marker was NOT used:** Present a summary of all source document values
+(from the `work/summary/` files) and ask the user to double-check them. Format
+as a compact table per document — don't dump the full summary files into the
+conversation; instead show the key dollar amounts, SSNs/EINs, and any values
+you're unsure about.
+
+Wait for the user to confirm before proceeding.
 
 **Prior year diff:** If the user provides a prior year return, don't just extract carryforwards — also compare what forms were filed last year vs. this year. Any form present last year but absent this year should be flagged later in 1c.
 
