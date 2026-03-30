@@ -140,14 +140,7 @@ wb.save("work/tax_computations.xlsx")
 
 These rules prevent context blowouts that cause compaction:
 
-1. **NEVER read PDFs with the Read tool.** Each page becomes ~250KB of base64 images (a 9-page return = 1.8 MB). Extract text instead:
-   ```bash
-   python3 -c "
-   import pdfplumber
-   with pdfplumber.open('source/document.pdf') as pdf:
-       for p in pdf.pages: print(p.extract_text())
-   "
-   ```
+1. **NEVER read PDFs with the Read tool.** Each page becomes ~250KB of base64 images (a 9-page return = 1.8 MB). Use the PDF extraction method chosen in Phase 1a instead.
 2. **NEVER read the same document twice.** Save extracted figures to `work/tax_data.txt` on first read.
 3. **Run field discovery ONCE per form** as a bulk JSON dump to `work/`. Do NOT use `--search` repeatedly.
 4. **Save all computed values to `work/computations.txt`** so they survive compaction.
@@ -160,7 +153,125 @@ Do all automated/cheap work first, then ask the user.
 
 #### 1a. Read and extract user-provided documents
 
-Read files from `source/` (move them there if needed). Use pdfplumber for PDFs, Read tool for CSVs. Save all extracted figures to `work/tax_data.txt` immediately — one section per document with every relevant number.
+**Before extracting any PDFs, ask the user which extraction method to use.**
+Present these three options, explaining the tradeoffs:
+
+> **How would you like me to extract data from your tax PDFs?**
+>
+> 1. **Have Claude view the PDFs directly** — Simplest and accurate on
+>    all document types including scanned forms.
+>    Your financial data (SSNs, income, etc.) goes to Claude's API — but if I'm already
+>    preparing your return, this adds no new exposure. May cost ~$0.25–0.80 in
+>    image/document tokens for a typical set of documents.
+>
+> 2. **Fast local OCR** — All processing stays on your machine. Uses `pdfplumber`
+>    for machine-generated PDFs (instant, perfect), falling back to local OCR for
+>    scanned documents. ~15–40 seconds total. Rare errors (~1 digit per 500
+>    values on scanned docs). On macOS uses Apple Vision (ocrmac); on Linux/Windows
+>    uses Tesseract with tessdata_best models. Requires installing `pdfplumber` and
+>    `pdf2image` plus `ocrmac` (macOS) or `tesseract` with tessdata_best (Linux/Windows).
+>
+> 3. **Accurate local OCR (marker-pdf)** — Highest local accuracy with structured
+>    Markdown+table output, but slow (~25 min for a typical set of documents on
+>    Apple Silicon; 2–3× slower on CPU). Uses deep learning models for OCR and
+>    layout detection. Perfect digit accuracy on scanned forms. Large install
+>    (~6GB downloaded).
+
+Wait for the user's answer before proceeding. Record their choice in
+`work/pdf_extraction_method.txt`.
+
+Read files from `source/` (move them there if needed). Use the chosen method for PDFs, Read tool for CSVs. Save all extracted figures to `work/tax_data.txt` immediately — one section per document with every relevant number.
+
+**PDF extraction by method:**
+
+*Method 1 — Have Claude view the PDFs directly:*
+
+Read the PDF files and extract relevant text to work/tax_data.txt.
+
+In **Claude Code**, just read the PDF files directly — Claude handles them natively.
+
+In **GitHub Copilot (VS Code)**, convert pages to images and use `view_image`:
+```bash
+# Requires Poppler installed
+pdftoppm -jpeg -r 300 source/document.pdf work/pages/document
+```
+Then use GitHub Copilot's `view_image` tool each resulting JPEG.
+
+*Method 2 — Fast local (pdfplumber + OCR fallback):*
+
+Use `pypdfium2` to inspect each page's text objects and decide whether to trust
+pdfplumber or fall back to OCR. This is the same approach marker uses internally —
+it catches all failure modes that simple heuristics miss (invisible OCR text with
+proper spacing, non-embedded placeholder fonts, scanned pages with background images).
+
+```python
+import pdfplumber
+import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
+
+def page_has_real_text(pdf_path, page_num):
+    """Check if a page has genuine (non-OCR) text using pdfium object inspection."""
+    doc = pdfium.PdfDocument(pdf_path)
+    page = doc.get_page(page_num)
+    page_bbox = page.get_bbox()  # (left, bottom, right, top)
+    page_area = (page_bbox[2] - page_bbox[0]) * (page_bbox[3] - page_bbox[1])
+
+    text_objs = [obj for obj in page.get_objects()
+                 if obj.type == pdfium_c.FPDF_PAGEOBJ_TEXT]
+    if not text_objs:
+        return False  # no text at all — need OCR
+
+    all_invisible = True
+    all_non_embedded = True
+    for text_obj in text_objs:
+        mode = pdfium_c.FPDFTextObj_GetTextRenderMode(text_obj)
+        if mode not in (pdfium_c.FPDF_TEXTRENDERMODE_INVISIBLE,
+                        pdfium_c.FPDF_TEXTRENDERMODE_UNKNOWN):
+            all_invisible = False
+        font = pdfium_c.FPDFTextObj_GetFont(text_obj)
+        if pdfium_c.FPDFFont_GetIsEmbedded(font):
+            all_non_embedded = False
+
+    if all_invisible or all_non_embedded:
+        return False  # OCR-generated text — need fresh OCR
+
+    # Check for large page-covering images (scanned page with OCR behind it)
+    for obj in page.get_objects():
+        if obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE:
+            l, b, r, t = obj.get_pos()
+            img_area = (r - l) * (t - b)
+            if img_area / page_area >= 0.65:
+                return False  # page is a scan
+
+    return True
+
+def extract_text(pdf_path):
+    """Extract text, falling back to OCR for scanned/OCR'd pages."""
+    texts = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            if page_has_real_text(pdf_path, i):
+                text = page.extract_text() or ""
+                if len(text.strip()) < 50:
+                    text = ocr_page(pdf_path, page_num=i)
+            else:
+                text = ocr_page(pdf_path, page_num=i)
+            texts.append(text)
+    return "\n\n".join(texts)
+```
+For the `ocr_page` function: on macOS, use `ocrmac.OCR(image).recognize()`;
+on Linux/Windows, use Tesseract with `tessdata_best` (NOT `tessdata_fast`, which
+has systematic 0↔8 confusion). Render at 300 DPI for OCR.
+
+*Method 3 — Accurate local (marker-pdf):*
+```bash
+marker_single "source/document.pdf" --output_dir work/marker_output \
+  --strip_existing_ocr --disable_image_extraction
+```
+**Always use `--strip_existing_ocr`.** Default mode trusts embedded OCR text, which
+is garbage on some scanned documents (e.g., W-2 values can come back blank). The
+`--strip_existing_ocr` flag removes existing text and lets marker decide whether
+to OCR based on actual page content.
 
 **Prior year diff:** If the user provides a prior year return, don't just extract carryforwards — also compare what forms were filed last year vs. this year. Any form present last year but absent this year should be flagged later in 1c.
 
