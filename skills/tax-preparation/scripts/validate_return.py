@@ -178,6 +178,20 @@ def run_cross_checks(fv):
         # 25a should match W-2 Box 2
         pass  # Requires source data — checked in the embedded validation sheet
 
+    # -- Underpayment penalty check (Form 2210) --
+    # If total tax exceeds total payments by > $1,000, the penalty computation
+    # must be addressed — either Form 2210 is computed or Line 38 is explicitly
+    # set (even to 0 with a note). Skipping this lets the IRS compute it at a
+    # higher amount.
+    total_tax = get("1040", "24")
+    total_payments = get("1040", "33")
+    penalty_line = get("1040", "38")
+    if total_tax is not None and total_payments is not None:
+        balance_due = total_tax - total_payments
+        if balance_due > 1000:
+            check("1040: Underpayment penalty (Line 38 / Form 2210) computed when balance due > $1,000",
+                  True, penalty_line is not None)
+
     return checks
 
 
@@ -434,10 +448,25 @@ def main():
     print(f"  {passed}/{total} checks passed", end="")
     if failed > 0:
         print(f", {failed} FAILED")
-        sys.exit(1)
     else:
         print()
-        sys.exit(0)
+
+    # Reminder: re-read SKILL.md to catch any missed steps.
+    # This prints unconditionally because validation is the gate between
+    # Phase 2 (computation) and Phase 3 (form filling). The agent's context
+    # may have been compacted by this point, losing earlier instructions.
+    print()
+    print("=" * 70)
+    print("CHECKPOINT: Re-read SKILL.md for the tax-preparation skill NOW.")
+    print("Verify you have not skipped any steps, including but not limited to:")
+    print("  - Underpayment penalty (Form 2210) — Phase 2")
+    print("  - Other obligations (FBAR, FATCA, Form 2210 safe harbor) — Phase 3d")
+    print("  - Verify against form instructions (fetch + read) — Phase 3c")
+    print("  - State return non-conformity items — Phase 2 state section")
+    print("  - Carryforwards sheet for next year — Phase 2 workbook")
+    print("=" * 70)
+
+    sys.exit(1 if failed > 0 else 0)
 
 
 if __name__ == "__main__":

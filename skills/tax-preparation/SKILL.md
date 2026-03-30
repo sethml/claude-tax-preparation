@@ -170,7 +170,7 @@ Before extracting, ask the user whether to also run marker-pdf:
 > **Would you like to also run marker-pdf for PDF extraction?**
 >
 > Marker uses deep learning for OCR and table recognition — it produces the
-> highest-accuracy structured output (~6 GB install, ~25–30 min for a typical
+> highest-accuracy structured output (6 GB install, around 30 min for a typical
 > set of documents on Apple Silicon, 2–3× slower on CPU).
 >
 > Without marker, I'll run pdfplumber, ocrmac (if on macOS), and Tesseract,
@@ -263,6 +263,7 @@ as ambiguous if:
   and marker was not used
 - A value looks suspicious (e.g., round numbers where decimals are expected,
   values that don't match document-level totals)
+- Values don't seem internally consistent (e.g. withholding exceeds wages))
 
 ##### Step 4: Resolve ambiguities with page images
 
@@ -364,6 +365,34 @@ forms alone won't tell you — for example:
 3. **Validate coverage against the 1040**: scan each line of the 1040
    and Schedules 1–3, confirm you have information for every applicable line.
 
+4. **Check whether estimated taxes should have been paid.** Estimated
+   payments are required when withholding doesn't cover the tax liability.
+   This commonly applies when the taxpayer has significant income without
+   withholding (self-employment, rental, capital gains, foreign income,
+   investment income) or when the prior year return showed a large balance
+   due. Check for these signals:
+   - Prior year return shows amount owed > $1,000
+   - Significant non-wage income in source documents (1099-NEC, 1099-MISC,
+     K-1, rental income, large 1099-B gains, 1099-DIV/INT)
+   - Prior year return includes Form 2210 or 1040-ES vouchers
+   - IRS safe harbor: tax owed after withholding and credits ≥ $1,000
+     AND withholding + credits < the lesser of 90% of current year tax
+     or 100% of prior year tax (110% if prior year AGI > $150K)
+
+   If any of these signals are present and NO estimated tax payment
+   records (1040-ES receipts, bank records, or confirmation numbers) are
+   found in `source/`, **explicitly ask the user:**
+
+   > Your income this year includes [sources without withholding]. Were
+   > any estimated tax payments (federal or state) made during the year?
+   > If so, please provide the dates and amounts for each quarterly
+   > payment (federal Form 1040-ES and/or state estimated payments).
+
+   Do NOT silently assume no estimated payments were made — people
+   commonly forget to include these records. If the user confirms no
+   estimated payments were made, note this for the underpayment penalty
+   computation in Phase 2.
+
 ### Phase 2: Build the Computation Workbook
 
 Write `work/build_computations.py` — a Python script that creates the computation workbook using `build_workbook.TaxWorkbook`. This single script contains ALL tax math. Run it to produce `work/tax_computations.xlsx`.
@@ -405,6 +434,25 @@ average exchange rate.
 4. Tax (QDCG worksheet if applicable)
 5. Credits, other taxes → Total Tax
 6. Payments → Refund/Owed
+
+**Underpayment Penalty (Form 2210, if applicable):**
+After computing the Federal Return, check whether an underpayment penalty
+applies.
+
+If the penalty applies:
+1. Download Form 2210 and its instructions
+2. Compute the required annual payment
+3. Compute the underpayment amount per quarter (required annual payment ÷ 4
+   minus any estimated payments made for that quarter)
+4. Compute the penalty using the IRS underpayment interest rate for each
+   quarter (look up the rate — it changes quarterly)
+5. Add a "Form 2210" computation sheet to the workbook
+6. The penalty amount flows to 1040 Line 38 (estimated tax penalty)
+
+If the taxpayer qualifies for an exception (e.g., annualized income
+installment method — Schedule AI), compute that too. Do NOT skip the penalty
+calculation — an unfiled Form 2210 means the IRS computes it for the taxpayer,
+often at a higher amount.
 
 **State Return:** Follow your line-by-line notes from 1b. Common non-conformity traps (not exhaustive — the instructions are authoritative):
 - Itemized deduction limitations (e.g., CA Pease limitation — still applies post-TCJA)
@@ -470,7 +518,7 @@ returns. Look up current-year thresholds for each — do not assume prior-year v
 | Foreign mutual funds/ETFs (PFICs) | **Form 8621** | Filed with return. May need QEF or mark-to-market election. |
 | Gifts > annual exclusion per recipient | **Form 709 (Gift Tax)** | Separate filing. No tax usually owed (uses lifetime exemption), but return still required. |
 | Paid contractor > reporting threshold for rental | **File 1099-NEC/MISC** | Due Jan 31 of following year. If late, advise filing anyway (penalties increase over time). |
-| Underpayment penalty | **Adjust W-4 or estimated payments** | Compute safe harbor for next year. Recommend specific W-4 line 4(c) amount or quarterly 1040-ES amounts. |
+| Underpayment penalty | **Form 2210 + next-year safe harbor** | If estimated taxes were required but not paid (or underpaid), compute the penalty via Form 2210 (see Phase 2) and include it on 1040 Line 38. Also compute safe harbor for next year and recommend specific W-4 line 4(c) amount or quarterly 1040-ES amounts. |
 | Can't file by deadline | **File for extension** | Extension = more time to file, NOT more time to pay. Estimated tax still due on original deadline. |
 | ISO stock options exercised | **AMT exposure** | May need Form 6251. Must track AMT basis separately from regular basis for future sale. |
 | HSA contributions | **Form 8889**; state conformity | Some states don't recognize HSA — add-back required on state return. |
