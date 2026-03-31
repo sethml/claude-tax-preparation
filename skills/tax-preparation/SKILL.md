@@ -210,7 +210,11 @@ with pdfplumber.open(pdf_path) as pdf:
 ```
 
 *ocrmac (macOS only):* `pip install ocrmac pdf2image` — uses Apple Vision.
-Render each page to 300 DPI image, then `ocrmac.OCR(image_path).recognize()`.
+Render each page to 300 DPI image, then:
+```python
+from ocrmac.ocrmac import OCR  # NOTE: must import from ocrmac.ocrmac, not ocrmac
+text = "\n".join(annotation[0] for annotation in OCR(image_path).recognize())
+```
 ~1 second per page. Near-perfect accuracy (~1 digit error per 500 values).
 
 *Tesseract:* Install the system package (`brew install tesseract` or
@@ -228,10 +232,25 @@ tesseract page.jpg output -l eng --tessdata-dir work/tessdata_best
 **Must use tessdata_best** — the default `tessdata_fast` has systematic 0↔8
 digit confusion (e.g., `0.00` → `8.00`).
 
-*img2table:* Install from GitHub main (PyPI version is broken with modern polars):
+*img2table:* Install from GitHub main (PyPI version is broken with modern polars),
+then ensure `opencv-contrib-python` is installed (img2table needs
+`cv2.ximgproc.niBlackThreshold`, which is only in the contrib package — the base
+`opencv-python` and `opencv-python-headless` packages do NOT include it):
 ```bash
 pip install "git+https://github.com/xavctn/img2table.git@main"
+# Remove any base opencv packages that would override contrib:
+pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true
+pip install opencv-contrib-python
 ```
+Verify before running:
+```bash
+python3 -c "import cv2; assert hasattr(cv2.ximgproc, 'niBlackThreshold'), 'Need opencv-contrib-python'"
+```
+If you see `AttributeError: module 'cv2.ximgproc' has no attribute 'niBlackThreshold'`, run
+`pip list | grep opencv` — if you see `opencv-python` or `opencv-python-headless` listed
+alongside `opencv-contrib-python`, the base package is overriding the contrib build.
+Fix: `pip uninstall -y opencv-python opencv-python-headless && pip install opencv-contrib-python`.
+
 Requires Tesseract system package (already installed for the Tesseract reader above).
 Render each page to 300 DPI image, then extract bordered tables:
 ```python
@@ -263,6 +282,11 @@ marker_single "source/document.pdf" --output_dir work/pdf_marker \
   --strip_existing_ocr --disable_image_extraction
 ```
 
+**All readers marked "Always" are MANDATORY.** Do NOT skip or ignore a reader
+because it failed to install or produced an error. If a reader fails, diagnose
+and fix the issue before moving on. Declaring "we have enough readers" and
+proceeding without a required reader is NOT acceptable.
+
 **Use subagents to run readers in parallel when possible.** Each subagent should
 run one reader across a batch of documents. Keep subagent context small — give
 them only the list of file paths and the extraction command, not the full
@@ -270,7 +294,11 @@ tax_data or other document contents.
 
 ##### Step 3: Reconcile and summarize
 
-Make sure all OCR extraction has completed before starting reconciliation.
+**Wait until ALL selected readers have finished successfully before starting
+reconciliation.** Verify by checking output file counts for each reader directory.
+Do NOT read any raw reader output during this wait — doing so violates the context
+budget (you will re-read the same data again during reconciliation). If a reader is
+still running, wait for it to complete.
 
 For each source document, read the output from all readers and produce a
 reconciled summary in `work/summary/<document>.txt`. The summary format is:
@@ -324,18 +352,27 @@ summary file with the resolved values.
 **Do NOT view images for documents where all readers agree** — this wastes
 context. Only use images as a tiebreaker.
 
-##### Step 5: User verification
+##### Step 5: User verification — MANDATORY STOP
 
-**If marker was used:** Summarize only documents where any ambiguity or doubt
-remains after cross-checking, and ask the user to verify those specific values.
+**Always stop here, regardless of how confident you are in the data.** Present
+a compact summary of all extracted values (from the `work/summary/` files) —
+one table per document showing key dollar amounts, SSNs/EINs, and form metadata.
+Do not dump the raw summary files; show the key numbers in a readable format.
 
-**If marker was NOT used:** Present a summary of all source document values
-(from the `work/summary/` files) and ask the user to double-check them. Format
-as a compact table per document — don't dump the full summary files into the
-conversation; instead show the key dollar amounts, SSNs/EINs, and any values
-you're unsure about.
+Before presenting, identify and prominently flag:
+- Any value where readers disagreed and the ambiguity was resolved by image review
+- Any document that was scanned (pdfplumber returned garbage), since OCR errors
+  are more likely on scanned documents
+- Any value that looks surprising: unusually round numbers, withholding that is
+  very high or very low relative to income, values that changed dramatically from
+  the prior year return, or amounts that seem inconsistent with other documents
+- Any box where img2table's table-cell association disagrees with other readers'
+  positional assignment (this often signals a misattributed box number)
 
-Wait for the user to confirm before proceeding.
+Present the flags clearly before the table so they are not missed. Then ask the
+user to confirm each flagged value and to do a sanity-check of the full table.
+
+**Do NOT proceed to Phase 2 until the user has confirmed the data.**
 
 **Prior year diff:** If the user provides a prior year return, don't just extract carryforwards — also compare what forms were filed last year vs. this year. Any form present last year but absent this year should be flagged later in 1c.
 
