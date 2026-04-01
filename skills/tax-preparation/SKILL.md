@@ -335,6 +335,15 @@ association over the other readers' positional guesses. However, img2table
 returns nothing for documents without visible grid lines — don't treat empty
 img2table output as a sign that data is missing.
 
+**Resolve masked SSNs/TINs.** Employee copies of W-2s and recipient copies
+of 1099s typically mask SSNs, showing only the last 4 digits (e.g.,
+`XXX-XX-1803`). These masked values are **not valid for filing**. To get
+full SSNs: (1) extract them from the prior year return if one was provided,
+(2) otherwise ask the user during the Phase 1c questionnaire. Every summary
+file must contain the **full 9-digit SSN** — never write a masked value like
+`XXX-XX-1803` to a summary file when the full number is available from
+another source.
+
 ##### Step 4: Resolve ambiguities with page images
 
 For any document with ambiguous values, render the relevant pages to 300 DPI

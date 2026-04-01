@@ -17,7 +17,7 @@ Read this document when you reach Step 8 (Discover Field Names & Fill Forms).
 
 ## Form-Specific Notes (IRS)
 
-- **1040**: First few fields (`f1_01`-`f1_03`) are fiscal year headers, not name fields. SSN = 9 digits, no dashes. Digital assets = crypto only, not stocks.
+- **1040**: First few fields (`f1_01`-`f1_03`) are fiscal year headers, not name fields. SSN = 9 digits, no dashes — must be the full number, never masked (e.g., `XXXXX1803` is not valid). Digital assets = crypto only, not stocks.
 - **8949**: Box A/B/C checkboxes are 3-way radio buttons. Totals at high field numbers (e.g. `f1_115`-`f1_119`), not after last data row. Schedule D lines 1b/8b (from 8949), not 1a/8a.
 - **Schedule D**: Some fields have `_RO` suffix (read-only) — skip those.
 - **Downloads**: Prior-year IRS = `irs.gov/pub/irs-prior/`, current = `irs.gov/pub/irs-pdf/`
