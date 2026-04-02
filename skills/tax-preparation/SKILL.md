@@ -570,7 +570,20 @@ Download applicable forms to `forms/`. Use `/irs-prior/` for prior-year IRS form
 python scripts/discover_fields.py forms/f1040_blank.pdf --compact > work/f1040_fields.json
 ```
 
+**Map fields to lines — MANDATORY before writing the fill script.** For every form, you MUST:
+1. Review `discover_fields.py` output and map each field name to a form line number using the XFA `<speak>` descriptions and/or `Rect` positions
+2. Write the mapping as a comment block at the top of the fill script section for that form
+3. Watch for multi-page forms: IRS Form 1040 page 1 uses `f1_` fields, page 2 uses `f2_` fields. **Do NOT assume `f1_` numbering continues across pages**
+4. For radio buttons (filing status, Yes/No questions), determine the correct `/AP/N` value by matching widget positions against page text — **never** assume the values follow any standard numbering convention (see `docs/form-filling.md` for the procedure)
+
 **Fill script** — Write `output/fill_YEAR.py` using `scripts/fill_forms.py`. The fill script reads values from `work/tax_computations.xlsx` (Form Values sheet). It must not contain any tax math. See `docs/form-filling.md` for `fill_irs_pdf` vs `fill_pdf` usage.
+
+**Common fill errors to check for:**
+- Missing SSNs on any form (must be full 9-digit, never masked)
+- Missing total/subtotal lines (Schedule 1 Part I/II totals, Schedule E column totals)
+- Radio buttons and Yes/No questions left unfilled (especially Schedule E 1099 question)
+- Addresses using incorrect data (verify against source documents)
+- Page 2+ fields using wrong prefix (e.g., `f1_61` instead of `f2_01`)
 
 **Verify** — Run `scripts/verify_filled.py` against expected values. Fix failures, re-run.
 
