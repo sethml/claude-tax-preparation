@@ -416,6 +416,16 @@ Do NOT hardcode thresholds — always look up fresh. These values go into the **
 
 **For state returns**, download the state form instructions and write line-by-line notes to `work/state_instructions_notes.txt`. For each line, note what it requires and flag any worksheets, limitations, phase-outs, or non-conformity with federal treatment.
 
+**Extracting text from instruction booklets**: Tax instruction booklets use
+multi-column layouts. Plain `pdfplumber.extract_text()` interleaves columns
+and produces garbled output. Use one of these layout-aware approaches:
+- `pymupdf4llm.to_markdown(path, pages=[...])` — fast, clean Markdown, handles
+  columns well. Best for targeted page ranges.
+- `marker_single` — highest accuracy for complex layouts, but slower (~60s).
+  Best for extracting entire booklets.
+- `pdfplumber.extract_text(layout=True)` — preserves spatial layout with
+  whitespace padding. Acceptable as a fallback.
+
 #### 1c. Ask about life situations and reconcile documents — MANDATORY
 
 **Generate the questionnaire dynamically from the current year's forms.**
@@ -592,6 +602,13 @@ This maps each AP/N value to the text label next to its widget on the page. **Ne
 - Page 2+ fields using wrong prefix (e.g., `f1_61` instead of `f2_01`)
 
 **Verify** — Run `scripts/verify_filled.py` against expected values. Fix failures, re-run.
+
+**Visual verification** — After filling, convert each page to an image, then
+check every value on the image against the fill script. Also go through the
+computation and confirm every output value appears on the correct form. See
+`docs/testing.md` for the full procedure. Open each output PDF in Preview
+(macOS) to confirm values render — Preview ignores field values set on child
+annotations rather than the parent field object.
 
 #### 3c. Verify against form instructions — MANDATORY
 
