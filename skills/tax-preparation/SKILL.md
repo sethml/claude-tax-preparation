@@ -38,6 +38,7 @@ working_dir/
     f1040sd_blank.pdf
     ca540_blank.pdf    ← (or equivalent state form)
     ...                ← add all applicable forms (Schedule E, A, B, 1-3, 8959, 8960, 4562, etc.)
+    instructions/      ← form instructions converted to Markdown (one .md per form)
   output/              ← final filled PDFs + fill script
     fill_YEAR.py       ← the fill script
     f1040_filled.pdf
@@ -416,16 +417,6 @@ Do NOT hardcode thresholds — always look up fresh. These values go into the **
 
 **For state returns**, download the state form instructions and write line-by-line notes to `work/state_instructions_notes.txt`. For each line, note what it requires and flag any worksheets, limitations, phase-outs, or non-conformity with federal treatment.
 
-**Extracting text from instruction booklets**: Tax instruction booklets use
-multi-column layouts. Plain `pdfplumber.extract_text()` interleaves columns
-and produces garbled output. Use one of these layout-aware approaches:
-- `pymupdf4llm.to_markdown(path, pages=[...])` — fast, clean Markdown, handles
-  columns well. Best for targeted page ranges.
-- `marker_single` — highest accuracy for complex layouts, but slower (~60s).
-  Best for extracting entire booklets.
-- `pdfplumber.extract_text(layout=True)` — preserves spatial layout with
-  whitespace padding. Acceptable as a fallback.
-
 #### 1c. Ask about life situations and reconcile documents — MANDATORY
 
 **Generate the questionnaire dynamically from the current year's forms.**
@@ -569,9 +560,40 @@ what's printed on the actual forms?).
 
 ### Phase 3: Fill and Verify Forms
 
-#### 3a. Download blank PDF forms
+#### 3a. Download forms and instructions
 
-Download applicable forms to `forms/`. Use `/irs-prior/` for prior-year IRS forms (`/irs-pdf/` is always current year). Find state forms on the state tax authority's website. Verify each download has `%PDF-` header.
+After collecting data from source documents (Phase 1a), download all federal
+and state forms that are likely to be necessary based on the taxpayer's
+situation. Don't wait until Phase 3b to discover you need a form — download
+everything up front so field discovery and instruction review can happen in
+bulk.
+
+**Blank forms:** Download to `forms/`. Find state forms on the state tax
+authority's website. Verify each download has `%PDF-` header.
+
+**Instructions — MANDATORY for every form downloaded.** Every time you download
+a blank form, also download its instructions PDF and convert it to Markdown in
+`forms/instructions/`. This ensures instructions are always available locally
+when filling:
+
+```bash
+mkdir -p forms/instructions
+# IRS example:
+curl -o forms/i1040_instructions.pdf https://www.irs.gov/pub/irs-pdf/i1040.pdf
+# State example:
+curl -o forms/ca540nr_booklet.pdf https://www.ftb.ca.gov/forms/YEAR/540nr-booklet.pdf
+```
+
+Convert each instructions PDF to Markdown immediately after downloading:
+- If the user opted in to marker: `marker_single forms/i1040_instructions.pdf --output_dir forms/instructions --strip_existing_ocr --disable_image_extraction`
+- Otherwise: `python3 -c "import pymupdf4llm; open('forms/instructions/i1040.md','w').write(pymupdf4llm.to_markdown('forms/i1040_instructions.pdf'))"`
+
+Instruction booklets use multi-column layouts — plain `pdfplumber.extract_text()`
+interleaves columns and produces garbled output. Both `marker` and `pymupdf4llm`
+handle multi-column layout correctly.
+
+If you download a new form later (e.g., you realize Schedule E is needed during
+Phase 2), immediately download and convert its instructions too.
 
 #### 3b. Discover fields, fill forms, and verify
 
@@ -606,19 +628,17 @@ This maps each AP/N value to the text label next to its widget on the page. **Ne
 **Visual verification** — After filling, convert each page to an image, then
 check every value on the image against the fill script. Also go through the
 computation and confirm every output value appears on the correct form. See
-`docs/testing.md` for the full procedure. Open each output PDF in Preview
-(macOS) to confirm values render — Preview ignores field values set on child
-annotations rather than the parent field object.
+`docs/verification.md` for the full procedure.
 
 #### 3c. Verify against form instructions — MANDATORY
 
 **For EVERY form you filled**, you MUST:
-1. Fetch the form's instructions (IRS: `irs.gov/instructions/i{form}`; state: from state tax authority)
-2. Read instruction text for every line you filled — especially **worksheets**, **special computations**, and **"see instructions"** references
+1. Read the converted instruction Markdown from `forms/instructions/` for that form (these were downloaded and converted in Phase 3a)
+2. Read instruction text for every line you filled — especially **worksheets**, **special computations**, and **"see instructions"** references. If there is any doubt whatsoever about how to fill a field, read the instruction text for that field
 3. Confirm each computation matches the instruction's method
 4. Save verification notes to `work/verification.txt`
 
-**Do NOT skip this.** Do NOT verify from memory — you must have the actual instruction text in context. With 1M token context, there is no cost reason to skip. The most common errors come from using a simplified formula when the instructions require a specific worksheet (e.g., Form 1116 Line 18 QDCG adjustment, Schedule CA Line 29 Pease limitation worksheet).
+**Do NOT skip this.** Do NOT verify from memory — you must have the actual instruction text in context. The most common errors come from using a simplified formula when the instructions require a specific worksheet (e.g., Form 1116 Line 18 QDCG adjustment, Schedule CA Line 29 Pease limitation worksheet).
 
 **Self-checks:**
 1. Tax bracket year matches tax year (not filing year)

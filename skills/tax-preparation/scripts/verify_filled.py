@@ -162,6 +162,15 @@ def main():
     if fail > 0:
         sys.exit(1)
 
+    print(
+        "\n  REMINDER: Field-level verification is not sufficient."
+        "\n  Perform visual verification per docs/verification.md:"
+        "\n    1. Convert each page to an image and check every displayed"
+        "\n       value against the fill script (correctness)."
+        "\n    2. Confirm every computation output appears on the correct"
+        "\n       form (completeness)."
+    )
+
 
 if __name__ == "__main__":
     main()
