@@ -216,9 +216,18 @@ def _set_need_appearances(writer):
 def _set_check_value(annot, val):
     """Set a checkbox annotation to checked (True) or unchecked (False)."""
     if val:
+        # Auto-detect on-state from /AP/N keys (e.g. /Yes for CA, /1 for IRS)
+        on_state = "/1"
+        ap = annot.get("/AP")
+        if ap:
+            n_dict = ap.get("/N")
+            if n_dict:
+                on_keys = [str(k) for k in n_dict.keys() if str(k) != "/Off"]
+                if on_keys:
+                    on_state = on_keys[0]
         annot.update({
-            NameObject("/V"): NameObject("/1"),
-            NameObject("/AS"): NameObject("/1"),
+            NameObject("/V"): NameObject(on_state),
+            NameObject("/AS"): NameObject(on_state),
         })
     else:
         annot.update({
