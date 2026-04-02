@@ -18,29 +18,29 @@ Read this document when you reach Phase 3 (Fill and Verify Forms).
 
 ## Critical: Field Name → Form Line Mapping
 
-**Never guess field-to-line mappings.** IRS field names (e.g., `f1_07`, `f2_03`) are opaque sequential identifiers — they do NOT correspond to form line numbers. Every mapping must be verified against the discovery output.
+**Never guess field-to-line mappings.** IRS field names are opaque sequential identifiers — they do NOT correspond to form line numbers. Every mapping must be verified against the discovery output.
 
 ### Mapping procedure — MANDATORY for every form
 
 1. Run `discover_fields.py` with `--compact` on the blank form
 2. Review the XFA `<speak>` descriptions for each field — these describe the line/purpose
 3. For fields lacking a clear `<speak>` description, use the field's `Rect` coordinates to determine its physical position on the form page, then match against the printed line labels using pdfplumber text extraction
-4. **Multi-page forms**: field names restart with a new prefix on each page. IRS Form 1040 page 1 uses `f1_01`–`f1_60`; page 2 uses `f2_01`–`f2_44`. Do NOT assume `f1_61` exists — it doesn't. Map page 2 lines to `f2_` fields separately
+4. **Multi-page forms**: field names restart with a new prefix on each page. IRS Form 1040 page 1 and page 2 use different prefixes — do NOT assume numbering continues across pages. Discover fields on each page separately and map them independently
 5. **Write the mapping in a comment block** in the fill script before using it. Each entry must show: field name → form line number → description. Example:
    ```python
-   # Schedule 1 field mapping (2024):
-   #   f1_07[0] → Line 3:  Business income or (loss) (Schedule C)
-   #   f1_09[0] → Line 5:  Rental real estate, royalties... (Schedule E)
-   #   f1_38[0] → Line 10: Combine lines 1 through 7 and 9
-   #   f2_31[0] → Line 26: Total adjustments (Part II)
+   # Schedule 1 field mapping (YEAR — re-verify each year):
+   #   fX_XX[0] → Line N:  Business income or (loss) (Schedule C)
+   #   fX_XX[0] → Line N:  Rental real estate, royalties... (Schedule E)
+   #   fX_XX[0] → Line N:  Combine lines ... (Part I total)
+   #   fX_XX[0] → Line N:  Total adjustments (Part II total)
    ```
-6. **Fill ALL total/subtotal lines**, not just the individual detail lines. Schedule 1 has Part I total (line 10) and Part II total (line 26); Schedule E has column totals; Schedule D has summary lines. Missing totals are a common error
+6. **Fill ALL total/subtotal lines**, not just the individual detail lines. Schedules typically have Part I and Part II totals, column totals, and summary lines. Missing totals are a common error
 
 ### Common mapping traps
 
-- **Schedule 1**: Lines 1–9 are Part I (income), lines 11–25 are Part II (adjustments). Business income (Schedule C) is line 3, **not** line 2a (alimony). Rental income (Schedule E) is line 5, **not** line 3. The Part I total (line 10) is at a much higher field number than the individual lines (e.g., `f1_38`, not `f1_14`)
-- **Form 1040 page 2**: Tax computation (lines 16–24), withholding (lines 25–26), payments (lines 27–33), refund/owed (lines 34–38) all use `f2_` fields. The fill script must map these with `f2_` names, not continuation of `f1_` numbering
-- **Schedule E**: Has a Yes/No question ("Did you make any payments that would require you to file Form(s) 1099?") above the property table. This is a radio button (`c1_1`) — don't skip it. Also, the property address may be a single combined field rather than separate street/city/state/ZIP fields
+- **Schedule 1**: Has two parts (income additions and adjustments). Business income (Schedule C) and rental income (Schedule E) go on their own designated lines — verify which lines from the form. The part totals are at field numbers far from the individual income lines; don't assume they follow sequentially
+- **Form 1040 page 2**: Tax computation, withholding, and payments sections are on page 2 and use a different field prefix than page 1. The fill script must map these with the page-2 prefix discovered from the blank form, not by continuing the page-1 numbering
+- **Schedule E**: Has a Yes/No question ("Did you make any payments that would require you to file Form(s) 1099?") above the property table — don't skip it. Also, the property address may be a single combined field rather than separate street/city/state/ZIP fields
 
 ## Radio Buttons: Determining Values
 
@@ -100,29 +100,22 @@ def map_radio_labels(pdf_path, radio_field_prefix, page_num=0):
         print(f"  AP/N={w['ap_n']:4}  →  {best_label}")
 ```
 
-**Example**: IRS 1040 filing status (`c1_3`) — the AP/N values are:
-- `/1` = Single (NOT MFJ!)
-- `/2` = Head of household
-- `/3` = Married filing jointly
-- `/4` = Married filing separately
-- `/5` = Qualifying surviving spouse
-
-This does **not** match the IRS filing status code numbering (1=Single, 2=MFJ, 3=MFS, 4=HOH, 5=QSS). Always verify.
+**Example**: IRS 1040 filing status radio buttons — the AP/N values do **not** match the IRS filing status codes (1=Single, 2=MFJ, etc.). The values are assigned by physical widget position on the form and can differ from any logical ordering. Always run the position-matching script above to determine the correct value rather than guessing.
 
 ## SSN Handling
 
 - SSNs on the return must be the **full 9-digit number**, never masked (e.g., `XXXXX1803` is NOT valid)
 - Employee/recipient copies of W-2s and 1099s typically mask SSNs. Resolve full SSNs from the prior year return during Phase 1a extraction
-- IRS form SSN fields accept digits only (no dashes, no spaces): `567431803`
-- Fill SSN fields on EVERY form that has them: 1040 (both taxpayer and spouse), 1040-X, Schedule 1, Schedule E, Form 8949, etc.
+- IRS form SSN fields accept digits only (no dashes, no spaces)
+- Fill SSN fields on EVERY form that has them: main return, amended return, and all schedules
 
 ## Form-Specific Notes (IRS)
 
-- **1040**: First few fields (`f1_01`-`f1_03`) are fiscal year headers, not name fields. SSN = 9 digits, no dashes — must be the full number, never masked (e.g., `XXXXX1803` is not valid). Digital assets = crypto only, not stocks. Page 2 fields use `f2_` prefix — tax computation (lines 16-24) is on page 2
+- **1040**: First few fields are fiscal year headers, not name fields. SSN = 9 digits, no dashes — must be the full number, never masked. Digital assets = crypto only, not stocks. Tax computation, withholding, and payments are on page 2 with a different field prefix than page 1
 - **1040-X (Amended)**: Filing instructions require attaching a corrected Form 1040 (marked "AMENDED") behind the 1040-X, plus any changed schedules. Read the 1040-X instructions to determine all required attachments. State amended returns may require a separate schedule (e.g., CA Schedule X)
-- **Schedule 1**: Business income (Schedule C) = line 3 (`f1_07`), rental income (Schedule E) = line 5 (`f1_09`), Part I total = line 10 (`f1_38`), Part II total = line 26 (`f2_31`). **Not** f1_05 (line 2a, alimony), f1_07 (line 3), f1_14 (line 8c). Always verify from discovery — these shift between years
-- **Schedule E**: Fill the 1099 question radio button (Yes/No). Property address may be a single combined field. Verify field layout from discovery
-- **8949**: Box A/B/C checkboxes are 3-way radio buttons. Totals at high field numbers (e.g. `f1_115`-`f1_119`), not after last data row. Schedule D lines 1b/8b (from 8949), not 1a/8a
+- **Schedule 1**: Has two distinct parts (income additions and adjustments to income). Business income (Schedule C) and rental income (Schedule E) each go on their own dedicated lines — confirm which lines by reading the form, not from memory. Part totals must also be filled; their field numbers are not adjacent to the detail lines
+- **Schedule E**: Fill the Yes/No 1099 question. Property address may be a single combined field rather than separate components. Verify field layout from discovery
+- **8949**: Box A/B/C checkboxes are 3-way radio buttons. Page totals appear at the end of the field list, not immediately after the last data row. Schedule D takes totals from 8949
 - **Schedule D**: Some fields have `_RO` suffix (read-only) — skip those
 - **Downloads**: Prior-year IRS = `irs.gov/pub/irs-prior/`, current = `irs.gov/pub/irs-pdf/`
 
