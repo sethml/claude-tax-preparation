@@ -327,6 +327,112 @@ def _format_compact(pdf_path, acroform_fields, xfa_fields):
     return {"pdf": pdf_path, "fields": mapping}
 
 
+def map_radio_labels(pdf_path):
+    """Map radio button AP/N values to nearby text labels using widget positions.
+
+    For each radio group in the PDF, extracts widget Rect positions (pypdf) and
+    matches them against nearby text (pdfplumber) to determine which AP/N value
+    corresponds to which form label.  This is CRITICAL because AP/N values are
+    arbitrary identifiers based on physical widget position — they do NOT
+    correspond to any logical numbering scheme (e.g., IRS filing status codes).
+
+    Returns a list of radio group dicts:
+        [{"field": "c1_3", "mappings": [{"ap_n": "/3", "label": "Married filing jointly ..."}]}]
+    """
+    from pypdf import PdfReader
+    try:
+        import pdfplumber
+    except ImportError:
+        print("  pdfplumber not installed — cannot map radio labels", file=sys.stderr)
+        return []
+
+    reader = PdfReader(pdf_path)
+    pdf = pdfplumber.open(pdf_path)
+
+    # Collect all Btn widgets with AP/N keys, grouped by parent field name
+    groups = {}  # parent_name -> [{ap_n, x, y, page}]
+    for pi, page in enumerate(reader.pages):
+        for annot in (page.get("/Annots") or []):
+            obj = annot.get_object()
+            ft = str(obj.get("/FT", ""))
+            parent_ref = obj.get("/Parent")
+            pname = ""
+            if parent_ref:
+                pobj = parent_ref.get_object()
+                pname = str(pobj.get("/T", ""))
+                if not ft:
+                    ft = str(pobj.get("/FT", ""))
+            if ft != "/Btn":
+                continue
+            ap = obj.get("/AP", {})
+            if "/N" not in ap:
+                continue
+            n_keys = [k for k in ap["/N"].keys() if k != "/Off"]
+            if not n_keys:
+                continue
+            rect = obj.get("/Rect")
+            if not rect:
+                continue
+            # Use center of widget rect (pypdf coords: origin at bottom-left)
+            cx = (float(rect[0]) + float(rect[2])) / 2
+            cy = (float(rect[1]) + float(rect[3])) / 2
+            group_name = pname or str(obj.get("/T", ""))
+            groups.setdefault((group_name, pi), []).append({
+                "ap_n": n_keys[0],
+                "x": cx,
+                "y_pdf": cy,  # bottom-left origin
+                "page": pi,
+            })
+
+    results = []
+    for (group_name, page_num), widgets in sorted(groups.items()):
+        if len(widgets) < 2:
+            continue  # single-widget groups are checkboxes, not radio groups
+
+        plumb_page = pdf.pages[page_num]
+        page_height = float(plumb_page.height)
+        words = plumb_page.extract_words()
+
+        mappings = []
+        for w in widgets:
+            # Convert pypdf y (bottom-left origin) to pdfplumber y (top-left origin)
+            y_plumb = page_height - w["y_pdf"]
+
+            # Find text to the right of the widget, within vertical tolerance
+            candidates = []
+            for word in words:
+                dx = word["x0"] - w["x"]
+                dy = abs(word["top"] + (word["bottom"] - word["top"]) / 2 - y_plumb)
+                if 0 < dx < 250 and dy < 10:
+                    candidates.append((dx, dy, word["text"]))
+
+            # Sort by distance and collect nearby words into a label
+            candidates.sort(key=lambda c: (c[1], c[0]))
+            # Take words that are close to the same y as the best match
+            label_parts = []
+            if candidates:
+                best_dy = candidates[0][1]
+                for dx, dy, text in candidates:
+                    if dy <= best_dy + 3 and dx < 250:
+                        label_parts.append((dx, text))
+                label_parts.sort(key=lambda p: p[0])
+
+            label = " ".join(t for _, t in label_parts) if label_parts else "?"
+            mappings.append({
+                "ap_n": w["ap_n"],
+                "label": label,
+                "x": round(w["x"], 1),
+                "y": round(w["y_pdf"], 1),
+            })
+
+        # Sort by position (top to bottom, left to right)
+        mappings.sort(key=lambda m: (-m["y"], m["x"]))
+        results.append({"field": group_name, "page": page_num, "mappings": mappings})
+
+    pdf.close()
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Discover PDF form field names, types, and metadata."
@@ -345,11 +451,25 @@ def main():
                         help="Output as JSON instead of human-readable text")
     parser.add_argument("--compact", action="store_true",
                         help="Output minimal {field_name: description} mapping as JSON")
+    parser.add_argument("--radio-labels", action="store_true",
+                        help="Map radio button AP/N values to nearby text labels")
 
     args = parser.parse_args()
 
     all_results = []
     for pdf_path in args.pdfs:
+        if args.radio_labels:
+            # Radio-label mode: only map radio AP/N values to text labels
+            groups = map_radio_labels(pdf_path)
+            if not groups:
+                print(f"No radio groups found in {pdf_path}", file=sys.stderr)
+                continue
+            for g in groups:
+                print(f"\nRadio group: {g['field']}  (page {g['page']})")
+                for m in g["mappings"]:
+                    print(f"  {m['ap_n']:6}  at ({m['x']}, {m['y']})  →  {m['label']}")
+            continue
+
         acroform_fields = discover_acroform(
             pdf_path, args.page, args.search, args.type_filter
         )

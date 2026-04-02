@@ -42,65 +42,41 @@ Read this document when you reach Phase 3 (Fill and Verify Forms).
 - **Form 1040 page 2**: Tax computation, withholding, and payments sections are on page 2 and use a different field prefix than page 1. The fill script must map these with the page-2 prefix discovered from the blank form, not by continuing the page-1 numbering
 - **Schedule E**: Has a Yes/No question ("Did you make any payments that would require you to file Form(s) 1099?") above the property table — don't skip it. Also, the property address may be a single combined field rather than separate street/city/state/ZIP fields
 
-## Radio Buttons: Determining Values
+## Radio Buttons: Determining Values — MANDATORY
 
-**Never assume radio button `/AP/N` values correspond to any logical numbering scheme.** The values are arbitrary identifiers assigned by the form designer based on physical widget position, not semantic meaning.
+**Never assume radio button `/AP/N` values correspond to any logical numbering scheme.** The values are arbitrary identifiers assigned by the form designer based on physical widget position, not semantic meaning. For example, IRS filing status codes are 1=Single, 2=MFJ, 3=MFS, 4=HOH, 5=QSS — but the actual AP/N values on the 2024 1040 form were `/1`=Single, `/2`=HOH, `/3`=MFJ, `/4`=MFS, `/5`=QSS. Using `/2` for MFJ will silently check the wrong box.
 
-### How to determine the correct radio value
+### Procedure
 
-For each radio group, extract the widget positions and match against nearby text labels:
+For every form with radio buttons, run `discover_fields.py --radio-labels` to automatically map AP/N values to text labels by matching widget positions against nearby page text:
 
-```python
-import pdfplumber
-from pypdf import PdfReader
-
-def map_radio_labels(pdf_path, radio_field_prefix, page_num=0):
-    """Map radio button AP/N values to their text labels.
-
-    Args:
-        pdf_path: Path to blank PDF form
-        radio_field_prefix: e.g., "c1_3" for filing status
-        page_num: 0-based page number
-    """
-    # 1. Get widget positions and AP/N values
-    reader = PdfReader(pdf_path)
-    page = reader.pages[page_num]
-    widgets = []
-    for annot in (page.get("/Annots") or []):
-        obj = annot.get_object()
-        t = str(obj.get("/T", ""))
-        if not t.startswith(radio_field_prefix + "["):
-            continue
-        rect = obj.get("/Rect")
-        ap_n = [k for k in (obj.get("/AP", {}).get("/N", {}).keys()) if k != "/Off"]
-        if rect and ap_n:
-            widgets.append({
-                "ap_n": ap_n[0],
-                "x": (float(rect[0]) + float(rect[2])) / 2,
-                "y": (float(rect[1]) + float(rect[3])) / 2,
-            })
-
-    # 2. Get text labels from the page
-    pdf = pdfplumber.open(pdf_path)
-    words = pdf.pages[page_num].extract_words()
-
-    # 3. Match each widget to nearest text to its right
-    for w in widgets:
-        best_label = "?"
-        best_dist = float("inf")
-        for word in words:
-            # Text should be to the right and at roughly the same y
-            dx = word["x0"] - w["x"]
-            dy = abs(word["top"] - (pdf.pages[page_num].height - w["y"])) # flip y
-            if dx > 0 and dx < 200 and dy < 15:
-                dist = dx**2 + dy**2
-                if dist < best_dist:
-                    best_dist = dist
-                    best_label = word["text"]
-        print(f"  AP/N={w['ap_n']:4}  →  {best_label}")
+```bash
+python scripts/discover_fields.py forms/f1040_blank.pdf --radio-labels
 ```
 
-**Example**: IRS 1040 filing status radio buttons — the AP/N values do **not** match the IRS filing status codes (1=Single, 2=MFJ, etc.). The values are assigned by physical widget position on the form and can differ from any logical ordering. Always run the position-matching script above to determine the correct value rather than guessing.
+Output:
+```
+Radio group: FilingStatus_ReadOrder[0]  (page 0)
+  /1      at (106.8, 588.0)  →  Single
+  /3      at (106.8, 576.0)  →  Married filing jointly (even if only one had income)
+  /4      at (106.8, 564.0)  →  Married filing separately (MFS)
+
+Radio group: Page1[0]  (page 0)
+  /2      at (373.2, 588.0)  →  Head of household (HOH)
+  /5      at (373.2, 564.0)  →  Qualifying surviving spouse (QSS)
+```
+
+**Include the radio mapping in the fill script's comment block**, alongside the text field mapping:
+```python
+# 1040 Filing Status radio mapping (re-verify each year):
+#   /1 → Single
+#   /2 → Head of household (HOH)
+#   /3 → Married filing jointly
+#   /4 → Married filing separately
+#   /5 → Qualifying surviving spouse
+```
+
+**Why this matters:** Radio groups that span multiple parent widgets (like Filing Status, which is split across `FilingStatus_ReadOrder` and `Page1`) have their AP/N values assigned by physical widget creation order, not by any standard coding convention. The mapping changes if the form designer rearranges the layout. Always re-discover for each tax year.
 
 ## SSN Handling
 

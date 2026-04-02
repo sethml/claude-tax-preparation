@@ -570,11 +570,17 @@ Download applicable forms to `forms/`. Use `/irs-prior/` for prior-year IRS form
 python scripts/discover_fields.py forms/f1040_blank.pdf --compact > work/f1040_fields.json
 ```
 
+**Radio label discovery** — for any form with radio buttons (filing status, Yes/No, checkboxes grouped as radios), also run:
+```bash
+python scripts/discover_fields.py forms/f1040_blank.pdf --radio-labels
+```
+This maps each AP/N value to the text label next to its widget on the page. **Never assume AP/N values match any logical coding convention** — they follow physical widget position, not semantic meaning. Include the resulting mapping in the fill script comment block.
+
 **Map fields to lines — MANDATORY before writing the fill script.** For every form, you MUST:
 1. Review `discover_fields.py` output and map each field name to a form line number using the XFA `<speak>` descriptions and/or `Rect` positions
 2. Write the mapping as a comment block at the top of the fill script section for that form
 3. Watch for multi-page forms: IRS Form 1040 page 1 uses `f1_` fields, page 2 uses `f2_` fields. **Do NOT assume `f1_` numbering continues across pages**
-4. For radio buttons (filing status, Yes/No questions), determine the correct `/AP/N` value by matching widget positions against page text — **never** assume the values follow any standard numbering convention (see `docs/form-filling.md` for the procedure)
+4. For radio buttons (filing status, Yes/No questions), run `discover_fields.py --radio-labels` to determine the correct `/AP/N` value for each option — **never** assume the values follow any standard numbering convention (see `docs/form-filling.md` for details and examples)
 
 **Fill script** — Write `output/fill_YEAR.py` using `scripts/fill_forms.py`. The fill script reads values from `work/tax_computations.xlsx` (Form Values sheet). It must not contain any tax math. See `docs/form-filling.md` for `fill_irs_pdf` vs `fill_pdf` usage.
 
